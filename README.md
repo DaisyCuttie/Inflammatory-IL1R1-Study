@@ -6,7 +6,7 @@ Analysis of IL1R1+ signaling in vivo 10x scRNA seq experiements
 
 Scripts of loading 10x scRNA seq data, downstream analysis, marker lookup, RNA velocity analysis and pseudotime anlysis
 
-![](https://github.com/DaisyCuttie/Inflammatory-IL1R1-Study/edit/main/some_results/Front_Picture.png)
+![](https://github.com/DaisyCuttie/Inflammatory-IL1R1-Study/blob/main/some_results/Front_Picture.png)
 
 
 ## Requirements
