@@ -28,15 +28,9 @@ install.packages(c(
 ))
 ```
 
-Versions in the comments are the ones the analysis was run with. `monocle3` is
-**not** required — the pseudotime Rmd reads pre-computed values rather than
-recomputing trajectories (see [Known gaps](#known-gaps)).
-
 ### Python
 
-Runs on **system Python** (`/usr/bin/python3`, 3.8.10) — not a conda env. The
-`scanpy` conda env on this machine is Python 3.10.20 and lacks scvelo; do not
-activate it. The default `python3` Jupyter kernel already resolves correctly.
+Runs on Python 3.8.10.
 
 ```bash
 pip install \
@@ -52,10 +46,6 @@ pip install \
   llvmlite==0.39.1 \
   h5py==3.7.0
 ```
-
-> **Pin these.** scvelo 0.2.5 is old and tightly coupled to numpy 1.23 /
-> numba 0.56. A plain `pip install scvelo` pulls a modern release that breaks
-> these notebooks.
 
 ### External tools
 
