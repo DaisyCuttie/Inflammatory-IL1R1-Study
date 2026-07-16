@@ -1,0 +1,236 @@
+---
+title: "Positive Only Analysis"
+author: "Priscila Analysis 2025"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "/home/chanyue/Single_Cell/Priscila_Analysis_2025/")
+```
+
+## Setup
+
+```{r libraries}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(harmony)
+```
+
+## Load data
+
+```{r load-data}
+load("./single_cell_object_harmony_w_sampleNames.RData")
+sample
+sample$Sample
+```
+
+## Treg marker dot plot (positive vs negative)
+
+```{r treg-dotplot}
+genes <- c(
+  "FOXP3","LAG3","CTLA4","LRRC32","IKZF2",
+  "TIGIT","IL2RA","RTKN2","ENTPD1","IL1R2","IL4I1"
+)
+
+p = DotPlot(
+  sample,
+  features = genes,
+  group.by = "Sample"  # column in sample@meta.data
+) + RotatedAxis()
+p
+ggsave("./Treg_marker_pos_vs_neg_dotplot.png", plot = p, width = 8, height = 4)
+```
+
+## Th17 marker dot plot (positive vs negative)
+
+```{r th17-dotplot}
+genes <- c(
+  "RORA", "RORC", "KLRB1",
+  "IL7R", "IL17A", "CCL20", "IL23A", "IL22", "IL1R1", "CSF2", "IL26",
+  "RBPJ", "IL17F", "CCR4", "CCR6"
+)
+
+p = DotPlot(
+  sample,
+  features = genes,
+  group.by = "Sample"  # column in sample@meta.data
+) + RotatedAxis()
+p
+ggsave("./Th17_marker_pos_vs_neg_dotplot.png", plot = p, width = 8, height = 4)
+```
+
+## Subset positives and re-process
+
+```{r subset-positives}
+Idents(sample) = sample$Sample
+pos_idents <- grep("_neg", Idents(sample), value = TRUE, invert = TRUE)
+positives <- subset(sample, idents = pos_idents)
+positives@project.name = "Th17_Treg_Project_Positive"
+UpdateSeuratObject(positives)
+
+positives = NormalizeData(positives, verbose = FALSE)
+positives = FindVariableFeatures(positives, selection.method = "vst", nfeatures = 3000)
+positives = ScaleData(positives, verbose = FALSE)
+positives = RunPCA(positives, verbose = TRUE)
+positives = RunHarmony(positives, assay.use="RNA", group.by.vars = "Sample", dims.use = 1:30)
+positives <- RunUMAP(positives, reduction = "harmony", dims = 1:30)
+positives = FindNeighbors(positives, reduction = "harmony", dims = 1:30)
+positives = FindClusters(positives, resolution = c(0.2, 0.4, 0.6, 0.8, 1))
+```
+
+## Cluster tree
+
+```{r clustree}
+library(clustree)
+p_tree <- clustree(positives, prefix = "RNA_snn_res.",
+                   prop_filter = 0.2)
+p_tree
+ggsave("./Cluster_Tree.png", plot = p_tree, width = 10, height = 8)
+```
+
+## Sample UMAP
+
+```{r sample-umap}
+sample_plot = DimPlot(positives, group.by = "Sample", label = TRUE)
+sample_plot
+ggsave("./sample_UMAP.png", plot = sample_plot, width = 8, height = 6)
+
+save(positives, file = "./positive_combined_harmony_seurat_allPCs.RData")
+```
+
+## Feature plots of key markers
+
+```{r feature-plots}
+Th17_genes = c("IL2RA","FOXP3","CTLA4","RORA","RBPJ","IL17F","IL22","IL26")
+p = FeaturePlot(positives, features = Th17_genes, label = TRUE, pt.size = 0.05, label.size = 3)
+ggsave("./FeaturePlot_KeyMarkers.png", plot = p, width = 8, height = 6)
+```
+
+## UMAP at resolution 0.8
+
+```{r umap-0.8}
+umap = DimPlot(positives, group.by = "RNA_snn_res.0.8", label = TRUE)
+umap
+ggsave("./UMAP_0.8.png", plot = umap, width = 8, height = 6)
+```
+
+## Cluster markers (resolution 0.8)
+
+```{r cluster-markers}
+positives.markers <- FindAllMarkers(positives, group.by = "RNA_snn_res.0.8", test.use = "wilcox", only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25)
+positives.markers
+positives.markers %>%
+  group_by(cluster) %>%
+  arrange(desc(avg_log2FC), p_val_adj, .by_group = TRUE) -> positives.markers
+write.csv(positives.markers, file = "./cluster_markers_0.8.csv")
+```
+
+## Top markers dot plot
+
+```{r top-markers-dotplot}
+positives.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 5) %>%
+  ungroup() -> top5
+
+top5_genes = unique(as.character(top5$gene))
+p = DotPlot(positives, features = top10_genes, group.by = "RNA_snn_res.0.8") + coord_flip()
+p
+ggsave("./Dotplot_top5.png", plot = p, width = 10, height = 24)
+```
+
+## Key marker dot plot
+
+```{r key-markers-dotplot}
+genes = c("RORA", "RORC", "RBPJ", "CCL20", "IL22", "IL26", "IL17F",
+          "IL17A", "IL23A", "IL21", "TNFRSF18", "IL4I1", "IL1R1", "CTLA4",
+          "LAG3", "TIGIT", "IL2RA", "FOXP3")
+
+p = DotPlot(positives, features = genes, group.by = "RNA_snn_res.0.8") + coord_flip()
+ggsave("./Dotplot_KeyMarkers.png", plot = p, width = 10, height = 12, bg = "white")
+```
+
+## Export markers to Excel
+
+```{r export-excel}
+library(readr)
+#install.packages("openxlsx")
+positives.markers <- positives.markers %>%
+  mutate(.cluster_num = parse_number(as.character(cluster))) %>%
+  arrange(.cluster_num, desc(avg_log2FC), p_val_adj) %>%
+  group_by(cluster)
+
+library(openxlsx)
+# 2) Build the sheet-2 gene columns in the correct cluster order
+gene_list <- positives.markers %>%
+  summarise(genes = list(gene),
+            .cluster_num = first(.cluster_num),
+            .groups = "drop") %>%
+  arrange(.cluster_num)
+
+# Convert to data frame where each cluster's genes are in a separate column
+gene_df <- do.call(cbind, lapply(gene_list$genes, function(x) {
+  length_diff <- max(lengths(gene_list$genes)) - length(x)
+  c(x, rep(NA, length_diff)) # pad with NA for equal length
+}))
+colnames(gene_df) <- paste0("Cluster_", gene_list$cluster)
+gene_df <- as.data.frame(gene_df)
+gene_df
+
+positives.markers
+# Write to Excel with two sheets
+wb <- createWorkbook()
+addWorksheet(wb, "All_Markers")
+addWorksheet(wb, "Genes_by_Cluster")
+
+writeData(wb, "All_Markers", positives.markers)
+writeData(wb, "Genes_by_Cluster", gene_df)
+
+saveWorkbook(wb, file = "./cluster_markers_0.8.xlsx", overwrite = TRUE)
+```
+
+## Stacked barplot of cell counts by sample
+
+```{r barplot-sample}
+# plot stacked barplot for annotating the clusters
+Idents(positives) = positives$RNA_snn_res.0.8
+positives$orig.ident = positives$Sample
+orig = positives$orig.ident
+orig
+u_orig = sort(unique(orig))
+u_orig
+cluster = as.character(Idents(positives))
+uct = sort(unique(cluster))
+z = matrix(nrow=length(uct), ncol=length(u_orig))
+rownames(z) = uct
+colnames(z) = u_orig
+z
+for (i in 1:nrow(z)){
+  for (j in 1:ncol(z)){
+    z[i,j] = sum(orig[cluster==uct[i]] == u_orig[j])
+  }
+}
+# Make a plot about num cells for each cluster by orig
+z = as.matrix(z)
+z1 = data.frame(ncells=as.vector(z),
+                type=rep(as.integer(rownames(z)), ncol(z)),
+                orig=rep(colnames(z), each=nrow(z)))
+p = ggplot(z1, aes(x=type, y=ncells, fill=orig, group=orig)) +
+  geom_bar(stat="identity", width=0.7) +
+  theme_classic() +
+  labs(x="Cluster Number", y="Numer of Cells", fill=NULL)+
+  scale_x_continuous(breaks=0:max(z1$type))
+p
+ggsave("./Barplot_Sample.png", plot = p, width = 8, height = 6)
+```
+
+## Average expression by cluster
+
+```{r average-expression}
+cluster.averages <- AverageExpression(positives, assays = "RNA")
+write.csv(cluster.averages, "ave_expr_by_cluster.csv")
+```

@@ -1,0 +1,398 @@
+---
+title: "Treg/Th17 Module Scores Along RNA Velocity Pseudotime"
+author: "Chanyue Charlotte Hu"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "/home/chanyue/Single_Cell/Priscila_Analysis_2025/Positive_CD3/")
+```
+
+## Overview
+
+Takes the CD3-positive Treg/Th17 subset, transfers the scVelo velocity
+pseudotime onto it, scores each cell for the Th17 / Transitional / Treg gene
+modules, and plots those scores on the UMAP and along pseudotime.
+
+## Setup
+
+```{r libraries}
+library(Seurat)
+library(scales)   # squish(), for clamping the color scale
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+All output for this run goes to one dated folder. Bump `out_dir` for a new run
+rather than editing paths further down.
+
+```{r output-dir}
+out_dir <- "./pseudotime_plot/05_2026"
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+```
+
+## Load the Treg/Th17 object
+
+```{r load-object}
+load("./30PCs/new_analysis_03_2026/Treg_Th17s.RData")
+```
+
+## Transfer velocity pseudotime onto the Seurat object
+
+The pseudotime CSV comes from the RNA velocity analysis, where cells are named
+`<sample>:<barcode>x` (e.g. `D3positive_RNA:AAACCCACACAATGAAx`). Seurat names
+them `<barcode>-<sample number>` (e.g. `AAACCCACACAATGAA-2`), so split the
+velocity name apart and rebuild it in Seurat's format before matching.
+
+```{r read-pseudotime}
+pseudotime <- read.csv(
+  "~/Single_Cell/Priscila_D3toD7_RNA_Velocity/figures/2026/new_analysis_03_2026/IL1R1_velocity_pseudotime_info.csv"
+)
+
+# Sample is everything before the colon; barcode is between the colon and the
+# trailing "x".
+pseudotime$sample  <- sub(":.*", "", pseudotime$X)
+pseudotime$barcode <- sub(".*:(.*)x$", "\\1", pseudotime$X)
+
+# Sample -> the numeric suffix Seurat gave that sample when the 10 runs were
+# merged, in load order (negative/positive alternating from D3 to D7).
+suffix_map <- c(
+  D3negative_RNA = "-1",
+  D3positive_RNA = "-2",
+  D4negative_RNA = "-3",
+  D4positive_RNA = "-4",
+  D5negative_RNA = "-5",
+  D5positive_RNA = "-6",
+  D6negative_RNA = "-7",
+  D6positive_RNA = "-8",
+  D7negative_RNA = "-9",
+  D7positive_RNA = "-10"
+)
+pseudotime$cell <- paste0(pseudotime$barcode, suffix_map[pseudotime$sample])
+
+head(pseudotime[, c("X", "sample", "barcode", "cell", "velocity_pseudotime")])
+```
+
+```{r add-pseudotime-metadata}
+# Named vector lookup: cells with no velocity pseudotime get NA.
+vpt <- pseudotime$velocity_pseudotime
+names(vpt) <- pseudotime$cell
+
+Treg_Th17$velocity_pseudotime <- vpt[Cells(Treg_Th17)]
+
+# Sanity check on how many cells actually got a pseudotime.
+sum(!is.na(Treg_Th17$velocity_pseudotime))
+```
+
+## Gene modules
+
+Three modules along the Th17 -> Treg reprogramming axis. Note the modules
+deliberately overlap (e.g. `CTLA4` is in both Transitional and Treg).
+
+```{r gene-modules}
+# Th17: effector / inflammatory cytokines plus immediate-early TFs.
+th17_genes <- c(
+  "IL26", "IL17F", "IL22", "IL17A", "EGR1", "FOS", "EGR2",
+  "NR4A3", "NR4A1", "NR4A2", "EGR3"
+)
+
+# Transitional: reprogramming intermediate.
+transitional_genes <- c(
+  "IL10", "IRF4", "CTLA4", "LAG3", "IL1R2", "IL1R1"
+)
+
+# Treg: suppressive / regulatory program.
+treg_genes <- c(
+  "CTLA4", "ENTPD1", "TIGIT", "IKZF2", "LAYN", "FOXP3"
+)
+```
+
+## Score the modules
+
+`AddModuleScore` appends a "1" to each name, so these land in the metadata as
+`Th171`, `Treg1`, and `Transition1`.
+
+```{r add-module-scores}
+Treg_Th17 <- AddModuleScore(Treg_Th17, features = list(th17_genes),         name = "Th17")
+Treg_Th17 <- AddModuleScore(Treg_Th17, features = list(treg_genes),         name = "Treg")
+Treg_Th17 <- AddModuleScore(Treg_Th17, features = list(transitional_genes), name = "Transition")
+```
+
+## Label cell types from the 0.8-resolution clusters
+
+Used to color the per-gene plots below.
+
+```{r assign-celltype}
+Treg_Th17$celltype <- case_when(
+  as.character(Treg_Th17$RNA_snn_res.0.8) %in% c("10", "1") ~ "Th17",
+  as.character(Treg_Th17$RNA_snn_res.0.8) == "0"            ~ "Transitional",
+  as.character(Treg_Th17$RNA_snn_res.0.8) %in% c("9", "6")  ~ "Treg",
+  TRUE                                                      ~ "Other"
+)
+
+table(Treg_Th17$celltype)
+```
+
+Shared cell type colors, so every plot below uses the same key.
+
+```{r celltype-colors}
+celltype_colors <- c(
+  "Th17"         = "#4E79A7",  # blue
+  "Transitional" = "#59A14F",  # green
+  "Treg"         = "#F28E2B",  # orange
+  "Other"        = "grey70"
+)
+```
+
+## Cell density along pseudotime
+
+Where each cluster sits along the trajectory, ignoring module scores.
+
+```{r density-plot}
+df <- Treg_Th17@meta.data
+
+p <- ggplot(df, aes(x = velocity_pseudotime, color = RNA_snn_res.0.8, fill = RNA_snn_res.0.8)) +
+  geom_density(alpha = 0.3, adjust = 1) +
+  labs(
+    x = "Velocity pseudotime",
+    y = "Cell density",
+    title = "Cell density along pseudotime"
+  ) +
+  theme_classic()
+
+p
+ggsave(file.path(out_dir, "Cell_count_density_no_celltype.png"),
+       plot = p, width = 8, height = 6, dpi = 600)
+```
+
+## Module scores on the UMAP
+
+The three UMAP plots are identical apart from which score they color by, so
+they share one theme and one plotting helper.
+
+```{r umap-theme}
+theme_score_umap <- function() {
+  theme(
+    panel.background = element_blank(),
+    panel.grid       = element_blank(),
+    axis.line        = element_line(color = "black"),
+    axis.text.x      = element_text(size = 18, color = "black"),
+    axis.text.y      = element_text(size = 18, color = "black"),
+    axis.title.x     = element_text(size = 18, color = "black"),
+    axis.title.y     = element_text(size = 18, color = "black"),
+    legend.title     = element_text(size = 18, color = "black"),
+    legend.text      = element_text(size = 18, color = "black"),
+    plot.title       = element_text(size = 20, color = "black", hjust = 0.5)
+  )
+}
+```
+
+```{r umap-score-helper}
+umap_df <- as.data.frame(Embeddings(Treg_Th17, "umap"))
+umap_df$Th17_score       <- Treg_Th17$Th171
+umap_df$Treg_score       <- Treg_Th17$Treg1
+umap_df$Transition_score <- Treg_Th17$Transition1
+
+# Scale is clamped to [0, 0.51]: negative scores are floored to grey (they are
+# not biologically meaningful here) and squish() keeps out-of-range highs at the
+# top color instead of dropping those cells.
+plot_score_umap <- function(score_col, legend_title, plot_title) {
+  ggplot(umap_df, aes(x = umap_1, y = umap_2)) +
+    geom_point(aes(color = .data[[score_col]]), alpha = 0.6, size = 0.8) +
+    scale_color_gradient(
+      low    = "grey70",
+      high   = "red",
+      limits = c(0, 0.51),
+      oob    = scales::squish
+    ) +
+    labs(x = "UMAP 1", y = "UMAP 2", color = legend_title, title = plot_title) +
+    theme_score_umap()
+}
+```
+
+```{r umap-th17}
+p <- plot_score_umap("Th17_score", "Th17 score", "Th17 module score on UMAP")
+p
+ggsave(file.path(out_dir, "module_score_Th17_featureplot.png"),
+       plot = p, width = 10, height = 6, dpi = 600)
+```
+
+```{r umap-treg}
+p <- plot_score_umap("Treg_score", "Treg score", "Treg module score on UMAP")
+p
+ggsave(file.path(out_dir, "module_score_Treg_featureplot.png"),
+       plot = p, width = 10, height = 6, dpi = 600)
+```
+
+```{r umap-transitional}
+p <- plot_score_umap("Transition_score", "Transitional score", "Transitional module score on UMAP")
+p
+ggsave(file.path(out_dir, "module_score_Transitional_featureplot.png"),
+       plot = p, width = 10, height = 6, dpi = 600)
+```
+
+## All three module scores along pseudotime
+
+The main trend figure: one loess curve per module over pseudotime.
+
+```{r module-trend-plot}
+score_long <- data.frame(
+  velocity_pseudotime = Treg_Th17$velocity_pseudotime,
+  Th17_score          = Treg_Th17$Th171,
+  Treg_score          = Treg_Th17$Treg1,
+  Transition_score    = Treg_Th17$Transition1
+) %>%
+  pivot_longer(
+    cols      = c(Th17_score, Treg_score, Transition_score),
+    names_to  = "module",
+    values_to = "score"
+  )
+
+p <- ggplot(score_long, aes(x = velocity_pseudotime, y = score, color = module)) +
+  geom_point(alpha = 0.15, size = 0.4) +
+  geom_smooth(se = FALSE, method = "loess", span = 0.5, linewidth = 1.5) +
+  scale_color_manual(
+    values = c(
+      "Th17_score"       = "#4E79A7",
+      "Treg_score"       = "#F28E2B",
+      "Transition_score" = "#59A14F"
+    ),
+    labels = c(
+      "Th17_score"       = "Th17",
+      "Treg_score"       = "Treg",
+      "Transition_score" = "Transition"
+    )
+  ) +
+  labs(
+    x     = "Velocity pseudotime",
+    y     = "Module score",
+    title = "Module scores along velocity pseudotime",
+    color = "Module"
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    axis.title.x = element_text(size = 16, face = "bold"),
+    axis.title.y = element_text(size = 16, face = "bold"),
+    axis.text.x  = element_text(size = 13, face = "bold"),
+    axis.text.y  = element_text(size = 13, face = "bold")
+  )
+
+p
+ggsave(file.path(out_dir, "module_score_trend_plot_1.png"),
+       plot = p, width = 10, height = 6, dpi = 600)
+```
+
+## Per-gene expression along pseudotime
+
+One PNG per module gene, colored by cell type with a single black loess trend
+across all cells. `unique()` because the modules share genes.
+
+```{r fetch-gene-expression}
+genes <- unique(c(th17_genes, transitional_genes, treg_genes))
+
+plot_long <- FetchData(
+  Treg_Th17,
+  vars  = c("velocity_pseudotime", "celltype", genes),
+  layer = "data"
+) %>%
+  filter(!is.na(velocity_pseudotime)) %>%
+  pivot_longer(
+    cols      = all_of(genes),
+    names_to  = "gene",
+    values_to = "expression"
+  )
+```
+
+```{r per-gene-plots}
+gene_dir <- file.path(out_dir, "individual_genes")
+dir.create(gene_dir, recursive = TRUE, showWarnings = FALSE)
+
+for (curr_gene in genes) {
+
+  curr_df <- plot_long %>% filter(gene == curr_gene)
+
+  p <- ggplot(curr_df, aes(x = velocity_pseudotime, y = expression, color = celltype)) +
+    geom_point(alpha = 0.25, size = 0.4) +
+    geom_smooth(method = "loess", se = FALSE, color = "black", linewidth = 0.8, span = 0.75) +
+    scale_color_manual(values = celltype_colors) +
+    # Points are tiny and transparent; bump them up in the legend only.
+    guides(color = guide_legend(override.aes = list(size = 3, alpha = 1))) +
+    labs(
+      x     = "RNA Velocity Pseudotime",
+      y     = "Gene expression",
+      color = "Cell Type",
+      title = paste0(curr_gene, " Expression Along Velocity Pseudotime")
+    ) +
+    theme_classic(base_size = 12) +
+    theme(
+      axis.text    = element_text(size = 10, color = "black"),
+      axis.title   = element_text(size = 12, color = "black"),
+      legend.title = element_text(size = 12, color = "black"),
+      legend.text  = element_text(size = 11, color = "black"),
+      plot.title   = element_text(size = 12, hjust = 0.5, face = "bold")
+    )
+
+  ggsave(
+    filename = file.path(gene_dir, paste0(curr_gene, "_pseudotime_plot.png")),
+    plot     = p,
+    width    = 6,
+    height   = 4,
+    dpi      = 600
+  )
+}
+```
+
+## Exploratory
+<!-- Not saved to disk — kept for interactive checks. -->
+
+<!-- Th17 score against pseudotime by cluster, zoomed into the second half of the -->
+<!-- trajectory where the Treg shift happens. -->
+
+<!-- ```{r explore-th17-zoom, eval=FALSE} -->
+<!-- ggplot(df, aes(x = velocity_pseudotime, y = Th171, color = RNA_snn_res.0.8)) + -->
+<!--   geom_point(alpha = 0.5, size = 1) + -->
+<!--   geom_smooth(method = "loess", color = "grey30", se = FALSE) + -->
+<!--   labs( -->
+<!--     x     = "RNA Velocity Pseudotime", -->
+<!--     y     = "Th17 Module Score", -->
+<!--     title = "Th17 Module Score vs. Velocity Pseudotime" -->
+<!--   ) + -->
+<!--   theme_classic(base_size = 14) + -->
+<!--   coord_cartesian(xlim = c(0.5, 1)) -->
+<!-- ``` -->
+
+<!-- NLRP3 (not in any of the modules above). -->
+
+<!-- ```{r explore-nlrp3, eval=FALSE} -->
+<!-- gene_df <- FetchData(Treg_Th17, vars = c("velocity_pseudotime", "NLRP3")) -->
+
+<!-- ggplot(gene_df, aes(x = velocity_pseudotime, y = NLRP3)) + -->
+<!--   geom_point(alpha = 0.15, size = 0.4, color = "#713948") + -->
+<!--   geom_smooth(se = TRUE, method = "loess", span = 0.3, linewidth = 1.2, color = "#713948") + -->
+<!--   labs( -->
+<!--     x     = "Velocity pseudotime", -->
+<!--     y     = "NLRP3 expression", -->
+<!--     title = "NLRP3 expression along velocity pseudotime" -->
+<!--   ) + -->
+<!--   theme_classic(base_size = 14) + -->
+<!--   theme( -->
+<!--     axis.title.x = element_text(size = 16, face = "bold"), -->
+<!--     axis.title.y = element_text(size = 16, face = "bold"), -->
+<!--     axis.text.x  = element_text(size = 13), -->
+<!--     axis.text.y  = element_text(size = 13) -->
+<!--   ) -->
+
+<!-- FeaturePlot( -->
+<!--   Treg_Th17, -->
+<!--   features   = "NLRP3", -->
+<!--   reduction  = "umap", -->
+<!--   cols       = c("grey70", "red"), -->
+<!--   min.cutoff = 0, -->
+<!--   max.cutoff = 0.51, -->
+<!--   pt.size    = 0.8 -->
+<!-- ) + -->
+<!--   labs(title = "NLRP3 expression on UMAP", color = "NLRP3 expression") -->
+<!-- ``` -->

@@ -1,0 +1,229 @@
+---
+title: "Positive CD3 Only Analysis"
+author: "Chanyue Charlotte Hu"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+knitr::opts_knit$set(root.dir = "/home/chanyue/Single_Cell/Priscila_Analysis_2025/Positive_CD3/")
+```
+
+## Setup
+
+```{r libraries}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(harmony)
+```
+
+
+## Finalize CD3 object (new in April 2026)
+
+Load the all-PC CD3 object, plot clusters, set `seurat_clusters` to the 0.8
+resolution, and save the final object. `eval=FALSE` because it writes the
+final RData.
+
+```{r finalize-cd3, eval=FALSE}
+load("./positive_CD3_seurat_allPCs.RData")
+
+p = DimPlot(pos_cd3, group.by = "seurat_clusters", label = TRUE)
+p
+ggsave("./30PCs/umap_clusters.png", plot = p, width = 8, height = 6, dpi = 600)
+pos_cd3$seurat_clusters = pos_cd3$RNA_snn_res.0.8
+save(pos_cd3, file = "./30PCs/positive_CD3_seurat_final.RData")
+```
+
+## Subset CD3-positive cells and re-process
+
+```{r subset-cd3, eval=FALSE}
+load("../single_cell_object_harmony_w_sampleNames.RData")
+unique(sample$Sample)
+
+Idents(sample) = sample$Sample
+pos_idents <- grep("CD3_pos", Idents(sample), value = TRUE)
+pos_cd3 <- subset(sample, idents = pos_idents)
+pos_cd3@project.name = "Th17_Treg_Project_Positive_CD3"
+UpdateSeuratObject(pos_cd3)
+
+pos_cd3 = NormalizeData(pos_cd3, verbose = FALSE)
+pos_cd3 = FindVariableFeatures(pos_cd3, selection.method = "vst", nfeatures = 3000)
+pos_cd3 = ScaleData(pos_cd3, verbose = FALSE)
+pos_cd3 = RunPCA(pos_cd3, verbose = TRUE)
+ElbowPlot(pos_cd3)
+pos_cd3 = FindNeighbors(pos_cd3, reduction = "pca", dims = 1:30)
+pos_cd3 = FindClusters(pos_cd3, reduction = "pca", resolution = c(0.2, 0.4, 0.6, 0.8))
+pos_cd3 = RunUMAP(pos_cd3, dims = 1:30)
+```
+
+## Cluster tree
+
+```{r clustree, eval=FALSE}
+library(clustree)
+p_tree <- clustree(pos_cd3, prefix = "RNA_snn_res.",
+                   prop_filter = 0.2)
+p_tree
+```
+
+## UMAPs across resolutions (all-PC object)
+
+```{r umaps-allpc}
+load("./positive_CD3_seurat_allPCs.RData")
+pos_cd3
+
+umap = DimPlot(pos_cd3, group.by = "RNA_snn_res.0.6", label = TRUE)
+umap
+
+umap = DimPlot(pos_cd3, group.by = "RNA_snn_res.0.8", label = TRUE)
+umap
+ggsave("./UMAP_0.8.png", plot = umap, width = 8, height = 6)
+
+umap = DimPlot(pos_cd3, group.by = "RNA_snn_res.0.4", label = TRUE)
+umap
+```
+
+## Cluster markers (0.8, 30PC — decided in March 2026)) 
+
+```{r markers-allpc-0.8, eval=FALSE}
+pos_cd3.markers <- FindAllMarkers(pos_cd3, group.by = "RNA_snn_res.0.8", test.use = "wilcox", only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25)
+pos_cd3.markers
+pos_cd3.markers %>%
+  group_by(cluster) %>%
+  arrange(desc(avg_log2FC), p_val_adj, .by_group = TRUE) -> pos_cd3.markers
+write.csv(pos_cd3.markers, file = "./cluster_markers_0.8.csv")
+```
+
+## Top markers dot plot
+
+```{r top-markers-dotplot}
+pos_cd3.markers %>%
+  group_by(cluster) %>%
+  dplyr::filter(avg_log2FC > 1) %>%
+  slice_head(n = 5) %>%
+  ungroup() -> top5
+
+top5_genes = unique(as.character(top5$gene))
+p = DotPlot(pos_cd3, features = top5_genes, group.by = "RNA_snn_res.0.8") + coord_flip()
+p
+ggsave("./Dotplot_top5_0.8.png", plot = p, width = 10, height = 24)
+```
+
+## Key marker dot plot
+
+```{r key-markers-dotplot}
+genes = c("RORA", "RORC", "RBPJ", "CCL20", "IL22", "IL26", "IL17F",
+          "IL17A", "IL23A", "IL21", "TNFRSF18", "IL4I1", "IL1R1", "CTLA4",
+          "LAG3", "TIGIT", "IL2RA", "FOXP3")
+
+p = DotPlot(pos_cd3, features = genes, group.by = "RNA_snn_res.0.8") + coord_flip()
+ggsave("./Dotplot_KeyMarkers_0.8.png", plot = p, width = 10, height = 12, bg = "white")
+```
+
+## Export markers to Excel
+
+```{r export-excel}
+library(readr)
+pos_cd3.markers <- pos_cd3.markers %>%
+  mutate(.cluster_num = parse_number(as.character(cluster))) %>%
+  arrange(.cluster_num, desc(avg_log2FC), p_val_adj) %>%
+  group_by(cluster)
+
+library(openxlsx)
+# 2) Build the sheet-2 gene columns in the correct cluster order
+gene_list <- pos_cd3.markers %>%
+  summarise(genes = list(gene),
+            .cluster_num = first(.cluster_num),
+            .groups = "drop") %>%
+  arrange(.cluster_num)
+
+# Convert to data frame where each cluster's genes are in a separate column
+gene_df <- do.call(cbind, lapply(gene_list$genes, function(x) {
+  length_diff <- max(lengths(gene_list$genes)) - length(x)
+  c(x, rep(NA, length_diff)) # pad with NA for equal length
+}))
+colnames(gene_df) <- paste0("Cluster_", gene_list$cluster)
+gene_df <- as.data.frame(gene_df)
+gene_df
+
+pos_cd3.markers
+# Write to Excel with two sheets
+wb <- createWorkbook()
+addWorksheet(wb, "All_Markers")
+addWorksheet(wb, "Genes_by_Cluster")
+
+writeData(wb, "All_Markers", pos_cd3.markers)
+writeData(wb, "Genes_by_Cluster", gene_df)
+
+saveWorkbook(wb, file = "./cluster_markers_0.8.xlsx", overwrite = TRUE)
+```
+
+## Stacked barplot of cell counts by donor
+
+```{r barplot-donor}
+# plot stacked barplot for annotating the clusters
+Idents(pos_cd3) = pos_cd3$RNA_snn_res.0.8
+pos_cd3$orig.ident = pos_cd3$Donor
+orig = pos_cd3$orig.ident
+orig
+u_orig = sort(unique(orig))
+u_orig
+cluster = as.character(Idents(pos_cd3))
+uct = sort(unique(cluster))
+z = matrix(nrow=length(uct), ncol=length(u_orig))
+rownames(z) = uct
+colnames(z) = u_orig
+z
+for (i in 1:nrow(z)){
+  for (j in 1:ncol(z)){
+    z[i,j] = sum(orig[cluster==uct[i]] == u_orig[j])
+  }
+}
+# Make a plot about num cells for each cluster by orig
+z = as.matrix(z)
+z1 = data.frame(ncells=as.vector(z),
+                type=rep(as.integer(rownames(z)), ncol(z)),
+                orig=rep(colnames(z), each=nrow(z)))
+p = ggplot(z1, aes(x=type, y=ncells, fill=orig, group=orig)) +
+  geom_bar(stat="identity", width=0.7) +
+  theme_classic() +
+  labs(x="Cluster Number", y="Numer of Cells", fill=NULL)+
+  scale_x_continuous(breaks=0:max(z1$type))
+p
+ggsave("./Barplot_Donor_0.8.png", plot = p, width = 8, height = 6)
+
+cluster.averages <- AverageExpression(pos_cd3, assays = "RNA")
+write.csv(cluster.averages, "ave_expr_by_cluster_0.8.csv")
+
+DimPlot(pos_cd3, group.by = "RNA_snn_res.0.8", label = TRUE) + DimPlot(pos_cd3, group.by = "RNA_snn_res.0.4", label = TRUE)
+```
+
+## average expression and separate out Treg_Th17 object
+
+```{r treg-th17-subset, eval=FALSE}
+avg_expr <- AverageExpression(
+  pos_cd3,
+  assays = "RNA",
+  group.by = "RNA_snn_res.0.8",
+)
+
+avg_expr
+write.csv(avg_expr, "./30PCs/new_analysis_03_2026/ave_expr_by_cluster_0.8.csv")
+
+Idents(pos_cd3) = pos_cd3$RNA_snn_res.0.8
+Treg_Th17 = subset(pos_cd3, idents = c(0, 1, 6, 9, 10))
+unique(Treg_Th17$RNA_snn_res.0.8)
+
+plot = DimPlot(Treg_Th17, label = TRUE)
+plot
+ggsave(plot = plot, filename = "./30PCs/new_analysis_03_2026/cell_selector.png", width = 8, height = 6)
+select.cells <- CellSelector(plot = plot)
+
+Treg_Th17 = subset(Treg_Th17, cells = select.cells)
+plot = DimPlot(Treg_Th17)
+select.cells <- CellSelector(plot = plot)
+Treg_Th17 = subset(Treg_Th17, cells = select.cells, invert = TRUE)
+
+save(Treg_Th17, file = "./30PCs/Treg_Th17s.RData")
+```
