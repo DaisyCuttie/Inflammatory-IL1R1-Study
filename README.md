@@ -56,11 +56,25 @@ pip install \
 
 Run in this order. 
 ### Clustering Analysis
-## 1. Load_Single.R
-## 2. Positive_Only_Analysis.Rmd
-## 3. Postive_CD3_Only.Rmd
+```bash
+Load_Single.R	# load in 10x cellranger outputs and do some standard scRNA analysis
+```
+```bash
+2. Positive_Only_Analysis.Rmd	# some exploratory studies and re-analyze positive data only
+```
+```bash
+3. Postive_CD3_Only.Rmd	# some other exploratory studies and made decision with using positive CD3 only
+```
 ### RNA Velocity and Pseudotime Analysis (use scvelo results)
-## 1. merge_loompy.ipynb
-## 2. scvelo_RNA_Velocity_2025.ipynb
-## 3. IL1R1_Pseudotime_2025.ipynb
-## 4. pseudotime_modulescore_plotting.Rmd
+```bash
+1. merge_loompy.ipynb	# process loom file outputing from the scvelo and merge all samples
+```
+```bash
+2. scvelo_RNA_Velocity_2025.ipynb	# subsetting cells that are only in the seurat object
+```
+```bash
+3. IL1R1_Pseudotime_2025.ipynb	# pseudotime analysis based on the RNA velocity
+```
+```bash
+4. pseudotime_modulescore_plotting.Rmd	# module score plotting along the pseudotime trend
+```
