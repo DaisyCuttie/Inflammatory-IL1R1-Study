@@ -57,7 +57,7 @@ pip install \
 Run in this order. 
 ### Clustering Analysis
 ```bash
-Load_Single.R	# load in 10x cellranger outputs and do some standard scRNA analysis
+1. Load_Single.R	# load in 10x cellranger outputs and do some standard scRNA analysis
 ```
 ```bash
 2. Positive_Only_Analysis.Rmd	# some exploratory studies and re-analyze positive data only
